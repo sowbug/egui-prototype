@@ -1,19 +1,22 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
-use eframe::egui::{self, Slider};
+use crossbeam_channel::Sender;
+use eframe::egui::{self, ComboBox, Slider, Ui};
 use groove_core::{
+    generators::Waveform,
     time::ClockNano,
     traits::{Performs, Resets},
     FrequencyHz, ParameterType, StereoSample, SAMPLE_BUFFER_SIZE,
 };
-use groove_entities::instruments::WelshSynth;
+use groove_entities::{controllers::LfoController, instruments::WelshSynth};
 use groove_orchestration::Orchestrator;
 use groove_settings::SongSettings;
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex, MutexGuard},
 };
-use stream::{AudioQueue, AudioStream, AudioStreamService};
+use stream::{AudioInterfaceInput, AudioQueue, AudioStreamService};
+use strum::IntoEnumIterator;
 
 mod stream;
 
@@ -36,58 +39,34 @@ struct AudioPrototype2 {
     bpm: ParameterType,
     sample_rate: Arc<Mutex<usize>>,
 
-    audio_stream_service: Option<AudioStreamService>,
+    audio_stream_sender: Sender<AudioInterfaceInput>,
     control_bar: ControlBar,
 }
 impl Default for AudioPrototype2 {
     fn default() -> Self {
         let clock_settings = ClockNano::default();
         let audio_stream_service = AudioStreamService::new();
+        let audio_stream_sender = audio_stream_service.sender().clone();
         let orchestrator = Arc::new(Mutex::new(Orchestrator::new_with(clock_settings)));
         let orchestrator_clone = Arc::clone(&orchestrator);
         let sample_rate = Arc::new(Mutex::new(0));
-        let sample_rate_clone = Arc::clone(&sample_rate);
-        std::thread::spawn(move || {
-            let orchestrator = orchestrator_clone;
-            let mut queue_opt = None;
-            loop {
-                if let Ok(event) = audio_stream_service.receiver().recv() {
-                    match event {
-                        stream::AudioInterfaceEvent::Reset(sample_rate, queue) => {
-                            if let Ok(mut sr) = sample_rate_clone.lock() {
-                                *sr = sample_rate;
-                            }
-                            if let Ok(mut o) = orchestrator.lock() {
-                                o.reset(sample_rate);
-                            }
-                            queue_opt = Some(queue);
-                            eprintln!("got a queue");
-                        }
-                        stream::AudioInterfaceEvent::NeedsAudio(when, count) => {
-                            if let Some(queue) = queue_opt.as_ref() {
-                                if let Ok(o) = orchestrator.lock() {
-                                    Self::generate_audio(o, queue, (count / 64) as u8);
-                                }
-                            }
-                        }
-                        stream::AudioInterfaceEvent::Quit => todo!(),
-                    }
-                }
-            }
-        });
+        Self::start_audio_stream(
+            orchestrator_clone,
+            audio_stream_service,
+            Arc::clone(&sample_rate),
+        );
         Self {
             bpm: Default::default(),
             orchestrator,
             name: "Arthur".to_owned(),
 
             sample_rate,
-
-            audio_stream_service: None, // Some(audio_stream_service),
-
+            audio_stream_sender,
             control_bar: Default::default(),
         }
     }
 }
+
 impl eframe::App for AudioPrototype2 {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Ok(o) = self.orchestrator.lock() {
@@ -110,22 +89,28 @@ impl eframe::App for AudioPrototype2 {
                 self.bpm += 1.0;
             }
             if ui.button("load").clicked() {
-                if let Ok(s) = SongSettings::new_from_yaml_file(
-                    "/home/miket/src/groove/projects/dev-loop.yaml",
-                ) {
-                    let pb = PathBuf::from("/home/miket/src/groove/assets");
-                    if let Ok(instance) = s.instantiate(&pb, false) {
-                        if let Ok(mut o) = self.orchestrator.lock() {
-                            if let Ok(sample_rate) = self.sample_rate.lock() {
-                                *o = instance;
-                                self.bpm = o.bpm();
-                                o.reset(*sample_rate);
+                let filename =
+                    "/home/miket/src/groove/projects/demos/controllers/stereo-automation.yaml";
+                match SongSettings::new_from_yaml_file(filename) {
+                    Ok(s) => {
+                        let pb = PathBuf::from("/home/miket/src/groove/assets");
+                        match s.instantiate(&pb, false) {
+                            Ok(instance) => {
+                                if let Ok(mut o) = self.orchestrator.lock() {
+                                    if let Ok(sample_rate) = self.sample_rate.lock() {
+                                        *o = instance;
+                                        self.bpm = o.bpm();
+                                        o.reset(*sample_rate);
+                                    }
+                                }
                             }
+                            Err(err) => eprintln!("instantiate: {}", err),
                         }
                     }
+                    Err(err) => eprintln!("new_from_yaml: {}", err),
                 }
             }
-            if let Ok(mut o) = self.orchestrator.lock() {
+            if let Ok(o) = self.orchestrator.lock() {
                 ui.label(format!("clock: {:?}", o.clock()));
             }
             ui.label(format!("Hello '{}', BPM {}", self.name, self.bpm));
@@ -139,6 +124,41 @@ impl eframe::App for AudioPrototype2 {
     }
 }
 impl AudioPrototype2 {
+    fn start_audio_stream(
+        orchestrator_clone: Arc<Mutex<Orchestrator>>,
+        audio_stream_service: AudioStreamService,
+        sample_rate_clone: Arc<Mutex<usize>>,
+    ) {
+        std::thread::spawn(move || {
+            let orchestrator = orchestrator_clone;
+            let mut queue_opt = None;
+            loop {
+                if let Ok(event) = audio_stream_service.receiver().recv() {
+                    match event {
+                        stream::AudioInterfaceEvent::Reset(sample_rate, queue) => {
+                            if let Ok(mut sr) = sample_rate_clone.lock() {
+                                *sr = sample_rate;
+                            }
+                            if let Ok(mut o) = orchestrator.lock() {
+                                o.reset(sample_rate);
+                            }
+                            queue_opt = Some(queue);
+                            eprintln!("got a queue");
+                        }
+                        stream::AudioInterfaceEvent::NeedsAudio(_when, count) => {
+                            if let Some(queue) = queue_opt.as_ref() {
+                                if let Ok(o) = orchestrator.lock() {
+                                    Self::generate_audio(o, queue, (count / 64) as u8);
+                                }
+                            }
+                        }
+                        stream::AudioInterfaceEvent::Quit => todo!(),
+                    }
+                }
+            }
+        });
+    }
+
     fn generate_audio(
         mut orchestrator: MutexGuard<Orchestrator>,
         queue: &AudioQueue,
@@ -212,9 +232,9 @@ impl Shows for Orchestrator {
         ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
             let mut id = 0;
 
-            let uids: Vec<usize> = self.entity_iter().map(|(uid, entity)| *uid).collect();
+            let uids: Vec<usize> = self.entity_iter().map(|(uid, _entity)| *uid).collect();
             for uid in uids {
-                let mut entity = self.get_mut(uid).unwrap();
+                let entity = self.get_mut(uid).unwrap();
                 egui::Frame::none()
                     .fill(egui::Color32::DARK_GRAY)
                     .show(ui, |ui| {
@@ -260,14 +280,6 @@ impl Shows for Orchestrator {
                                     {
                                         e.set_passband_ripple(pbr)
                                     };
-                                    ui.label(entity.as_has_uid().name());
-                                    if ui.button("boo boo").clicked() {};
-                                    if ui.button("boo 1oo").clicked() {};
-                                    if ui.button("boo 2oo").clicked() {};
-                                    if ui.button("boo 3oo").clicked() {};
-                                    if ui.button("boo 4oo").clicked() {};
-                                    if ui.button("boo 5oo").clicked() {};
-                                    if ui.button("boo 6oo").clicked() {};
                                 }
                                 groove_orchestration::Entity::BiQuadFilterLowShelf(e) => {
                                     ui.label(entity.as_has_uid().name());
@@ -309,7 +321,35 @@ impl Shows for Orchestrator {
                                     ui.label(entity.as_has_uid().name());
                                 }
                                 groove_orchestration::Entity::LfoController(e) => {
-                                    ui.label(entity.as_has_uid().name());
+                                    let mut frequency = e.frequency().value();
+                                    let mut waveform = e.waveform();
+                                    if ui
+                                        .add(
+                                            Slider::new(
+                                                &mut frequency,
+                                                LfoController::frequency_range(),
+                                            )
+                                            .text("Frequency"),
+                                        )
+                                        .changed()
+                                    {
+                                        e.set_frequency(frequency.into());
+                                    };
+                                    ComboBox::new(ui.next_auto_id(), "Waveform")
+                                        .selected_text(waveform.to_string())
+                                        .show_ui(ui, |ui| {
+                                            for w in Waveform::iter() {
+                                                ui.selectable_value(
+                                                    &mut waveform,
+                                                    w,
+                                                    w.to_string(),
+                                                );
+                                            }
+                                        });
+                                    if waveform != e.waveform() {
+                                        eprintln!("changed {} {}", e.waveform(), waveform);
+                                        e.set_waveform(waveform);
+                                    }
                                 }
                                 groove_orchestration::Entity::Limiter(e) => {
                                     ui.label(entity.as_has_uid().name());

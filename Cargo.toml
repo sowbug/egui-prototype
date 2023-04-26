@@ -26,6 +26,8 @@ groove-toys = { path = "/home/miket/src/groove/toys", features = [
 ] }
 serde = { version = "1.0", features = ["derive"], optional = true }
 serde_yaml = "0.8"
+strum = "0.24.1"
+strum_macros = "0.24.2"
 
 [features]
 default = ["serialization"]

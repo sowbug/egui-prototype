@@ -997,6 +997,8 @@ dependencies = [
  "groove-toys",
  "serde",
  "serde_yaml",
+ "strum",
+ "strum_macros",
 ]
 
 [[package]]
