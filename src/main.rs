@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
 use crossbeam_channel::Sender;
-use eframe::egui::{self, ComboBox, Slider, Ui};
+use eframe::egui::{self, ComboBox, DragValue, Slider};
 use groove_core::{
     generators::Waveform,
     time::ClockNano,
@@ -49,7 +49,8 @@ impl Default for AudioPrototype2 {
         let audio_stream_sender = audio_stream_service.sender().clone();
         let orchestrator = Arc::new(Mutex::new(Orchestrator::new_with(clock_settings)));
         let orchestrator_clone = Arc::clone(&orchestrator);
-        let sample_rate = Arc::new(Mutex::new(0));
+        const SAMPLE_RATE: usize = 44100;
+        let sample_rate = Arc::new(Mutex::new(SAMPLE_RATE));
         Self::start_audio_stream(
             orchestrator_clone,
             audio_stream_service,
@@ -62,7 +63,7 @@ impl Default for AudioPrototype2 {
 
             sample_rate,
             audio_stream_sender,
-            control_bar: Default::default(),
+            control_bar: ControlBar::default(),
         }
     }
 }
@@ -73,54 +74,25 @@ impl eframe::App for AudioPrototype2 {
             self.bpm = o.bpm();
         }
         if let Ok(mut o) = self.orchestrator.lock() {
-            egui::TopBottomPanel::top("control-strip")
+            egui::TopBottomPanel::top("control-bar")
                 .show(ctx, |ui| self.control_bar.show(ui, &mut o));
             egui::TopBottomPanel::bottom("orchestrator").show(ctx, |ui| o.show(ui));
         }
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Audio Prototype 2");
+            ui.heading("Groove");
             ui.horizontal(|ui| {
                 let name_label = ui.label("Your name: ");
                 ui.text_edit_singleline(&mut self.name)
                     .labelled_by(name_label.id);
             });
-            ui.add(egui::Slider::new(&mut self.bpm, 1.0..=999.9).text("BPM"));
-            if ui.button("Increase BPM").clicked() {
-                self.bpm += 1.0;
-            }
             if ui.button("load").clicked() {
-                let filename =
-                    "/home/miket/src/groove/projects/demos/controllers/stereo-automation.yaml";
-                match SongSettings::new_from_yaml_file(filename) {
-                    Ok(s) => {
-                        let pb = PathBuf::from("/home/miket/src/groove/assets");
-                        match s.instantiate(&pb, false) {
-                            Ok(instance) => {
-                                if let Ok(mut o) = self.orchestrator.lock() {
-                                    if let Ok(sample_rate) = self.sample_rate.lock() {
-                                        *o = instance;
-                                        self.bpm = o.bpm();
-                                        o.reset(*sample_rate);
-                                    }
-                                }
-                            }
-                            Err(err) => eprintln!("instantiate: {}", err),
-                        }
-                    }
-                    Err(err) => eprintln!("new_from_yaml: {}", err),
-                }
+                self.handle_load();
             }
             if let Ok(o) = self.orchestrator.lock() {
                 ui.label(format!("clock: {:?}", o.clock()));
             }
-            ui.label(format!("Hello '{}', BPM {}", self.name, self.bpm));
         });
-        if let Ok(mut o) = self.orchestrator.lock() {
-            if self.bpm != o.bpm() {
-                o.set_bpm(self.bpm);
-                eprintln!("BPM is now {}", self.bpm)
-            }
-        }
+        if let Ok(o) = self.orchestrator.lock() {}
     }
 }
 impl AudioPrototype2 {
@@ -143,7 +115,6 @@ impl AudioPrototype2 {
                                 o.reset(sample_rate);
                             }
                             queue_opt = Some(queue);
-                            eprintln!("got a queue");
                         }
                         stream::AudioInterfaceEvent::NeedsAudio(_when, count) => {
                             if let Some(queue) = queue_opt.as_ref() {
@@ -166,8 +137,6 @@ impl AudioPrototype2 {
     ) {
         let mut samples = [StereoSample::SILENCE; SAMPLE_BUFFER_SIZE];
         for i in 0..buffer_count {
-            let is_last_iteration = i == buffer_count - 1;
-
             let (response, ticks_completed) = orchestrator.tick(&mut samples);
             if ticks_completed < samples.len() {
                 // self.stop_playback();
@@ -189,12 +158,28 @@ impl AudioPrototype2 {
                     }
                 }
             }
-            // if is_last_iteration {
-            //     // This clock is used to tell the app where we are in the song, so
-            //     // even though it looks like it's not helping here in the loop, it's
-            //     // necessary.
-            //     self.update_control_bar_clock();
-            // }
+        }
+    }
+
+    fn handle_load(&mut self) {
+        let filename = "/home/miket/src/groove/projects/demos/controllers/stereo-automation.yaml";
+        match SongSettings::new_from_yaml_file(filename) {
+            Ok(s) => {
+                let pb = PathBuf::from("/home/miket/src/groove/assets");
+                match s.instantiate(&pb, false) {
+                    Ok(instance) => {
+                        if let Ok(mut o) = self.orchestrator.lock() {
+                            if let Ok(sample_rate) = self.sample_rate.lock() {
+                                *o = instance;
+                                self.bpm = o.bpm();
+                                o.reset(*sample_rate);
+                            }
+                        }
+                    }
+                    Err(err) => eprintln!("instantiate: {}", err),
+                }
+            }
+            Err(err) => eprintln!("new_from_yaml: {}", err),
         }
     }
 }
@@ -203,7 +188,12 @@ impl AudioPrototype2 {
 struct ControlBar {}
 impl ControlBar {
     fn show(&self, ui: &mut egui::Ui, orchestrator: &mut Orchestrator) {
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+        ui.horizontal(|ui| {
+            let mut bpm = orchestrator.bpm();
+            ui.label("BPM");
+            if ui.add(DragValue::new(&mut bpm).speed(0.1)).changed() {
+                orchestrator.set_bpm(bpm);
+            }
             if ui.button("start over").clicked() {
                 orchestrator.skip_to_start();
             }
@@ -213,6 +203,12 @@ impl ControlBar {
             if ui.button("pause").clicked() {
                 orchestrator.stop();
             }
+
+            let clock = orchestrator.clock();
+            let minutes: u8 = (clock.seconds() / 60.0).floor() as u8;
+            let seconds = clock.seconds() as usize % 60;
+            let thousandths = (clock.seconds().fract() * 1000.0) as u16;
+            ui.label(format!("{minutes:03}:{seconds:02}:{thousandths:03}"));
         });
     }
 }
