@@ -3,12 +3,14 @@
 use crossbeam_channel::Sender;
 use eframe::egui::{self, ComboBox, DragValue, Slider};
 use groove_core::{
-    generators::Waveform,
+    generators::{Envelope, Waveform},
     time::ClockNano,
     traits::{Performs, Resets},
-    FrequencyHz, ParameterType, StereoSample, SAMPLE_BUFFER_SIZE,
+    BipolarNormal, FrequencyHz, ParameterType, StereoSample, SAMPLE_BUFFER_SIZE,
 };
-use groove_entities::{controllers::LfoController, instruments::WelshSynth};
+use groove_entities::{
+    controllers::LfoController, effects::BiQuadFilterLowPass24db, instruments::WelshSynth,
+};
 use groove_orchestration::Orchestrator;
 use groove_settings::SongSettings;
 use std::{
@@ -217,9 +219,92 @@ trait Shows {
     fn show(&mut self, ui: &mut egui::Ui);
 }
 
+impl Shows for Envelope {
+    fn show(&mut self, ui: &mut egui::Ui) {
+        let mut attack = self.attack();
+        let mut decay = self.decay();
+        let mut sustain = self.sustain().value();
+        let mut release = self.release();
+        ui.label("Attack");
+        if ui.add(DragValue::new(&mut attack).speed(0.1)).changed() {
+            self.set_attack(attack);
+        }
+        ui.end_row();
+        ui.label("Decay");
+        if ui.add(DragValue::new(&mut decay).speed(0.1)).changed() {
+            self.set_decay(decay);
+        }
+        ui.end_row();
+        ui.label("Sustain");
+        if ui.add(DragValue::new(&mut sustain).speed(0.1)).changed() {
+            self.set_sustain(sustain.into());
+        }
+        ui.end_row();
+        ui.label("Release");
+        if ui.add(DragValue::new(&mut release).speed(0.1)).changed() {
+            self.set_release(release);
+        }
+        ui.end_row();
+    }
+}
+
 impl Shows for WelshSynth {
     fn show(&mut self, ui: &mut egui::Ui) {
-        ui.label(format!("hello! {}", self.gain().value()));
+        let mut pan = self.pan().value();
+        if ui
+            .add(
+                Slider::new(&mut pan, BipolarNormal::range())
+                    .text("Pan")
+                    .max_decimals(1),
+            )
+            .changed()
+        {
+            self.set_pan(pan.into());
+        };
+        Envelope::new_with(self.envelope().clone()).show(ui);
+    }
+}
+
+impl Shows for BiQuadFilterLowPass24db {
+    fn show(&mut self, ui: &mut egui::Ui) {
+        let mut cutoff = self.cutoff().value();
+        let mut pbr = self.passband_ripple();
+        if ui
+            .add(Slider::new(&mut cutoff, FrequencyHz::range()).text("Cutoff"))
+            .changed()
+        {
+            self.set_cutoff(cutoff.into());
+        };
+        if ui
+            .add(Slider::new(&mut pbr, 0.0..=10.0).text("Passband"))
+            .changed()
+        {
+            self.set_passband_ripple(pbr)
+        };
+    }
+}
+
+impl Shows for LfoController {
+    fn show(&mut self, ui: &mut egui::Ui) {
+        let mut frequency = self.frequency().value();
+        let mut waveform = self.waveform();
+        if ui
+            .add(Slider::new(&mut frequency, LfoController::frequency_range()).text("Frequency"))
+            .changed()
+        {
+            self.set_frequency(frequency.into());
+        };
+        ComboBox::new(ui.next_auto_id(), "Waveform")
+            .selected_text(waveform.to_string())
+            .show_ui(ui, |ui| {
+                for w in Waveform::iter() {
+                    ui.selectable_value(&mut waveform, w, w.to_string());
+                }
+            });
+        if waveform != self.waveform() {
+            eprintln!("changed {} {}", self.waveform(), waveform);
+            self.set_waveform(waveform);
+        }
     }
 }
 
@@ -259,23 +344,7 @@ impl Shows for Orchestrator {
                                     ui.label(entity.as_has_uid().name());
                                 }
                                 groove_orchestration::Entity::BiQuadFilterLowPass24db(e) => {
-                                    let mut cutoff = e.cutoff().value();
-                                    let mut pbr = e.passband_ripple();
-                                    if ui
-                                        .add(
-                                            Slider::new(&mut cutoff, FrequencyHz::range())
-                                                .text("Cutoff"),
-                                        )
-                                        .changed()
-                                    {
-                                        e.set_cutoff(cutoff.into());
-                                    };
-                                    if ui
-                                        .add(Slider::new(&mut pbr, 0.0..=10.0).text("Passband"))
-                                        .changed()
-                                    {
-                                        e.set_passband_ripple(pbr)
-                                    };
+                                    e.show(ui);
                                 }
                                 groove_orchestration::Entity::BiQuadFilterLowShelf(e) => {
                                     ui.label(entity.as_has_uid().name());
@@ -317,35 +386,7 @@ impl Shows for Orchestrator {
                                     ui.label(entity.as_has_uid().name());
                                 }
                                 groove_orchestration::Entity::LfoController(e) => {
-                                    let mut frequency = e.frequency().value();
-                                    let mut waveform = e.waveform();
-                                    if ui
-                                        .add(
-                                            Slider::new(
-                                                &mut frequency,
-                                                LfoController::frequency_range(),
-                                            )
-                                            .text("Frequency"),
-                                        )
-                                        .changed()
-                                    {
-                                        e.set_frequency(frequency.into());
-                                    };
-                                    ComboBox::new(ui.next_auto_id(), "Waveform")
-                                        .selected_text(waveform.to_string())
-                                        .show_ui(ui, |ui| {
-                                            for w in Waveform::iter() {
-                                                ui.selectable_value(
-                                                    &mut waveform,
-                                                    w,
-                                                    w.to_string(),
-                                                );
-                                            }
-                                        });
-                                    if waveform != e.waveform() {
-                                        eprintln!("changed {} {}", e.waveform(), waveform);
-                                        e.set_waveform(waveform);
-                                    }
+                                    e.show(ui);
                                 }
                                 groove_orchestration::Entity::Limiter(e) => {
                                     ui.label(entity.as_has_uid().name());
@@ -393,7 +434,7 @@ impl Shows for Orchestrator {
                                     ui.label(entity.as_has_uid().name());
                                 }
                                 groove_orchestration::Entity::WelshSynth(e) => {
-                                    ui.label(entity.as_has_uid().name());
+                                    e.show(ui);
                                 }
                             }
                         })
