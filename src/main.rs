@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
 use crossbeam_channel::Sender;
-use eframe::egui::{self, accesskit::Tree, CollapsingHeader, ComboBox, DragValue, Slider};
+use eframe::egui::{self, CollapsingHeader, ComboBox, DragValue, RichText, Slider, Ui};
 use groove_core::{
     generators::{Envelope, Waveform},
     time::ClockNano,
@@ -9,7 +9,9 @@ use groove_core::{
     BipolarNormal, FrequencyHz, ParameterType, StereoSample, SAMPLE_BUFFER_SIZE,
 };
 use groove_entities::{
-    controllers::LfoController, effects::BiQuadFilterLowPass24db, instruments::WelshSynth,
+    controllers::LfoController,
+    effects::{BiQuadFilterLowPass24db, Mixer},
+    instruments::{Metronome, WelshSynth},
 };
 use groove_orchestration::Orchestrator;
 use groove_settings::SongSettings;
@@ -43,6 +45,8 @@ struct AudioPrototype2 {
 
     audio_stream_sender: Sender<AudioInterfaceInput>,
     control_bar: ControlBar,
+
+    tree: Tree,
 }
 impl Default for AudioPrototype2 {
     fn default() -> Self {
@@ -66,6 +70,7 @@ impl Default for AudioPrototype2 {
             sample_rate,
             audio_stream_sender,
             control_bar: ControlBar::default(),
+            tree: Tree::demo(),
         }
     }
 }
@@ -94,9 +99,9 @@ impl eframe::App for AudioPrototype2 {
             }
         });
         left.show(ctx, |ui| {
-            if let Ok(o) = self.orchestrator.lock() {
-                //                ui.add(Tree::new("file-browser"));
-            }
+            CollapsingHeader::new("File browser")
+                .default_open(true)
+                .show(ui, |ui| self.tree.ui(ui));
         });
         center.show(ctx, |ui| {
             if let Ok(mut o) = self.orchestrator.lock() {
@@ -316,135 +321,222 @@ impl Shows for LfoController {
     }
 }
 
+impl Shows for Metronome {
+    fn show(&mut self, ui: &mut egui::Ui) {
+        ui.label(format!("BPM: {:0.1}", self.bpm()));
+        ui.label(format!(
+            "Time Signature: {}/{}",
+            self.clock().time_signature().top,
+            self.clock().time_signature().bottom
+        ));
+        ui.label(if self.is_playing() { "X" } else { " " });
+    }
+}
+
+impl Shows for Mixer {
+    fn show(&mut self, ui: &mut egui::Ui) {
+        // Mixer doesn't have any UI
+    }
+}
+
 impl Shows for Orchestrator {
     fn show(&mut self, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
             let uids: Vec<usize> = self.entity_iter().map(|(uid, _entity)| *uid).collect();
             for uid in uids {
                 let entity = self.get_mut(uid).unwrap();
-                CollapsingHeader::new(entity.as_has_uid().name()).show(ui, |ui| {
-                    egui::Frame::none()
-                        .fill(egui::Color32::DARK_GRAY)
-                        .show(ui, |ui| {
-                            ui.vertical(|ui| match entity {
-                                groove_orchestration::Entity::Arpeggiator(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::BiQuadFilterAllPass(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::BiQuadFilterBandPass(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::BiQuadFilterBandStop(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::BiQuadFilterHighPass(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::BiQuadFilterHighShelf(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::BiQuadFilterLowPass12db(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::BiQuadFilterLowPass24db(e) => {
-                                    e.show(ui);
-                                }
-                                groove_orchestration::Entity::BiQuadFilterLowShelf(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::BiQuadFilterNone(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::BiQuadFilterPeakingEq(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::Bitcrusher(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::Chorus(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::Clock(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::Compressor(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::ControlTrip(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::DebugSynth(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::Delay(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::Drumkit(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::FmSynth(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::Gain(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::LfoController(e) => {
-                                    e.show(ui);
-                                }
-                                groove_orchestration::Entity::Limiter(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::MidiTickSequencer(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::Mixer(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::PatternManager(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::Reverb(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::Sampler(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::Sequencer(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::SignalPassthroughController(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::Timer(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::ToyAudioSource(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::ToyController(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::ToyEffect(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::ToyInstrument(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::ToySynth(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::Trigger(e) => {
-                                    ui.label(entity.as_has_uid().name());
-                                }
-                                groove_orchestration::Entity::WelshSynth(e) => {
-                                    e.show(ui);
-                                }
-                            })
-                        });
-                });
+                CollapsingHeader::new(entity.as_has_uid().name())
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        egui::Frame::none()
+                            .fill(egui::Color32::DARK_GRAY)
+                            .show(ui, |ui| {
+                                ui.vertical(|ui| match entity {
+                                    groove_orchestration::Entity::Arpeggiator(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::BiQuadFilterAllPass(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::BiQuadFilterBandPass(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::BiQuadFilterBandStop(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::BiQuadFilterHighPass(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::BiQuadFilterHighShelf(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::BiQuadFilterLowPass12db(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::BiQuadFilterLowPass24db(e) => {
+                                        e.show(ui);
+                                    }
+                                    groove_orchestration::Entity::BiQuadFilterLowShelf(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::BiQuadFilterNone(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::BiQuadFilterPeakingEq(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::Bitcrusher(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::Chorus(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::Clock(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::Compressor(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::ControlTrip(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::DebugSynth(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::Delay(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::Drumkit(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::FmSynth(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::Gain(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::LfoController(e) => {
+                                        e.show(ui);
+                                    }
+                                    groove_orchestration::Entity::Limiter(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::Metronome(e) => {
+                                        e.show(ui);
+                                    }
+                                    groove_orchestration::Entity::MidiTickSequencer(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::Mixer(e) => {
+                                        e.show(ui);
+                                    }
+                                    groove_orchestration::Entity::PatternManager(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::Reverb(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::Sampler(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::Sequencer(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::SignalPassthroughController(
+                                        e,
+                                    ) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::Timer(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::ToyAudioSource(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::ToyController(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::ToyEffect(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::ToyInstrument(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::ToySynth(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::Trigger(e) => {
+                                        ui.label(entity.as_has_uid().name());
+                                    }
+                                    groove_orchestration::Entity::WelshSynth(e) => {
+                                        e.show(ui);
+                                    }
+                                })
+                            });
+                    });
             }
         });
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Action {
+    Keep,
+    Delete,
+}
+
+#[derive(Clone, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+struct Tree(Vec<Tree>);
+
+impl Tree {
+    pub fn demo() -> Self {
+        Self(vec![
+            Tree(vec![Tree::default(); 4]),
+            Tree(vec![Tree(vec![Tree::default(); 2]); 3]),
+        ])
+    }
+
+    pub fn ui(&mut self, ui: &mut Ui) -> Action {
+        self.ui_impl(ui, 0, "root")
+    }
+}
+
+impl Tree {
+    fn ui_impl(&mut self, ui: &mut Ui, depth: usize, name: &str) -> Action {
+        CollapsingHeader::new(name)
+            .default_open(depth < 1)
+            .show(ui, |ui| self.children_ui(ui, depth))
+            .body_returned
+            .unwrap_or(Action::Keep)
+    }
+
+    fn children_ui(&mut self, ui: &mut Ui, depth: usize) -> Action {
+        if depth > 0
+            && ui
+                .button(RichText::new("delete").color(ui.visuals().warn_fg_color))
+                .clicked()
+        {
+            return Action::Delete;
+        }
+
+        self.0 = std::mem::take(self)
+            .0
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, mut tree)| {
+                if tree.ui_impl(ui, depth + 1, &format!("child #{}", i)) == Action::Keep {
+                    Some(tree)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if ui.button("+").clicked() {
+            self.0.push(Tree::default());
+        }
+
+        Action::Keep
     }
 }
