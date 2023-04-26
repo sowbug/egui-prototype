@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
 use crossbeam_channel::Sender;
-use eframe::egui::{self, ComboBox, DragValue, Slider};
+use eframe::egui::{self, accesskit::Tree, CollapsingHeader, ComboBox, DragValue, Slider};
 use groove_core::{
     generators::{Envelope, Waveform},
     time::ClockNano,
@@ -75,26 +75,34 @@ impl eframe::App for AudioPrototype2 {
         if let Ok(o) = self.orchestrator.lock() {
             self.bpm = o.bpm();
         }
-        if let Ok(mut o) = self.orchestrator.lock() {
-            egui::TopBottomPanel::top("control-bar")
-                .show(ctx, |ui| self.control_bar.show(ui, &mut o));
-            egui::TopBottomPanel::bottom("orchestrator").show(ctx, |ui| o.show(ui));
-        }
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Groove");
-            ui.horizontal(|ui| {
-                let name_label = ui.label("Your name: ");
-                ui.text_edit_singleline(&mut self.name)
-                    .labelled_by(name_label.id);
-            });
-            if ui.button("load").clicked() {
-                self.handle_load();
+        let top = egui::TopBottomPanel::top("control-bar");
+        let bottom = egui::TopBottomPanel::bottom("orchestrator");
+        let left = egui::SidePanel::left("left-sidebar");
+        let center = egui::CentralPanel::default();
+
+        top.show(ctx, |ui| {
+            if let Ok(mut o) = self.orchestrator.lock() {
+                self.control_bar.show(ui, &mut o);
             }
+        });
+        bottom.show(ctx, |ui| {
             if let Ok(o) = self.orchestrator.lock() {
                 ui.label(format!("clock: {:?}", o.clock()));
             }
+            if ui.button("load").clicked() {
+                self.handle_load();
+            }
         });
-        if let Ok(o) = self.orchestrator.lock() {}
+        left.show(ctx, |ui| {
+            if let Ok(o) = self.orchestrator.lock() {
+                //                ui.add(Tree::new("file-browser"));
+            }
+        });
+        center.show(ctx, |ui| {
+            if let Ok(mut o) = self.orchestrator.lock() {
+                o.show(ui);
+            }
+        });
     }
 }
 impl AudioPrototype2 {
@@ -311,17 +319,14 @@ impl Shows for LfoController {
 impl Shows for Orchestrator {
     fn show(&mut self, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
-            let mut id = 0;
-
             let uids: Vec<usize> = self.entity_iter().map(|(uid, _entity)| *uid).collect();
             for uid in uids {
                 let entity = self.get_mut(uid).unwrap();
-                egui::Frame::none()
-                    .fill(egui::Color32::DARK_GRAY)
-                    .show(ui, |ui| {
-                        ui.vertical(|ui| {
-                            ui.heading(entity.as_has_uid().name());
-                            match entity {
+                CollapsingHeader::new(entity.as_has_uid().name()).show(ui, |ui| {
+                    egui::Frame::none()
+                        .fill(egui::Color32::DARK_GRAY)
+                        .show(ui, |ui| {
+                            ui.vertical(|ui| match entity {
                                 groove_orchestration::Entity::Arpeggiator(e) => {
                                     ui.label(entity.as_has_uid().name());
                                 }
@@ -436,10 +441,9 @@ impl Shows for Orchestrator {
                                 groove_orchestration::Entity::WelshSynth(e) => {
                                     e.show(ui);
                                 }
-                            }
-                        })
-                    });
-                id += 1;
+                            })
+                        });
+                });
             }
         });
     }
